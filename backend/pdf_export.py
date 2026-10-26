@@ -177,7 +177,7 @@ def sorted_types(result: Dict[str, Any], pcts: Dict[str, int]) -> List[Tuple[str
     pairs: List[Tuple[str, int]] = []
     for item in raw_sorted:
         if isinstance(item, (list, tuple)) and len(item) >= 2 and item[0] in TYPE_INFO:
-            pairs.append((str(item[0]), clamp_pct(item[1])))
+            pairs.append((str(item[0]), pcts[str(item[0])]))
     if pairs:
         return pairs
     return sorted(pcts.items(), key=lambda item: item[1], reverse=True)
@@ -240,7 +240,7 @@ def radar_svg(scores: Dict[str, int]) -> str:
     )
 
 
-def bars(items: Iterable[Tuple[str, int]]) -> str:
+def bars(items: Iterable[Tuple[str, int]], unit: str = "%") -> str:
     html = []
     for key, value in items:
         info = TYPE_INFO.get(key, TYPE_INFO["M"])
@@ -249,7 +249,7 @@ def bars(items: Iterable[Tuple[str, int]]) -> str:
             <div class="bar-row">
               <div class="bar-name"><span style="background:{info['bg']};color:{info['color']}">{text(key)}</span>{text(info['name'])}</div>
               <div class="bar-track"><div class="bar-fill" style="width:{clamp_pct(value)}%;background:{info['color']}"></div></div>
-              <div class="bar-value" style="color:{info['color']}">{clamp_pct(value)}%</div>
+              <div class="bar-value" style="color:{info['color']}">{clamp_pct(value)}{text(unit)}</div>
             </div>
             """
         )
@@ -339,7 +339,42 @@ def motto_block(main_type: str) -> str:
     return f'<div class="motto"><p>{text(motto)}</p></div>'
 
 
+def trace_metadata(result: Dict[str, Any]) -> str:
+    version = "精简版" if result.get("version") == "lite" else "完整版"
+    algorithm = result.get("algorithm_version") or "legacy_v1"
+    generated = result.get("generated_at") or result.get("createdAt") or "历史记录未保存时间"
+    bank = result.get("question_bank_version") or "历史题库"
+    return text(f"{version} · 评分版本 {algorithm} · 题库 {bank} · 生成时间 {generated}")
+
+
+def build_lite_report_html(result: Dict[str, Any]) -> str:
+    scores = score_percentages(result)
+    ranked = sorted_types(result, scores)
+    unit = "分" if result.get("score_kind") == "standardized_score" else "%"
+    features = result.get("lite_features") or (result.get("core_features") or [])[:3]
+    feature_html = "".join(f'<li data-core-feature="true">{text(feature)}</li>' for feature in features)
+    return f"""<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>MAHDI精简测评报告</title>
+<style>
+@page {{ size:A4; margin:16mm; }}
+body {{ font-family:"Microsoft YaHei",sans-serif; color:#31253b; line-height:1.7; font-size:13px; }}
+header {{ margin-bottom:20px; }} h1 {{ font-size:23px; color:#6C216D; }} h2 {{ font-size:16px; color:#6C216D; }}
+section {{ border:1px solid #E8DFEA; border-radius:12px; padding:14px 20px; margin:12px 0; break-inside:avoid; }}
+.meta {{ color:#706576; font-size:11px; overflow-wrap:anywhere; }}
+.bar-row {{ display:grid; grid-template-columns:150px 1fr 55px; gap:10px; align-items:center; margin:10px 0; }}
+.bar-name {{ display:flex; gap:8px; align-items:center; }} .bar-name span {{ padding:2px 6px; border-radius:4px; }}
+.bar-track {{ height:8px; background:#F0E8F1; border-radius:6px; }} .bar-fill {{ height:8px; border-radius:6px; }}
+.bar-value {{ text-align:right; }}
+</style></head><body><header><strong>美太咨询 MA&T · MAHDI精简测评</strong><div>{text(result.get('userName') or '学员')}</div><div class="meta">{trace_metadata(result)}</div></header>
+<section data-result-block="conclusion"><h2>主类型结论</h2><h1>{text(result.get('conclusion') or result.get('mainTypeName'))}</h1><strong>{text(result.get('tendency_strength'))}</strong><p>{text(result.get('conclusion_reason'))}</p></section>
+<section data-result-block="scores"><h2>五类得分</h2>{bars(ranked, unit)}</section>
+<section data-result-block="features"><h2>核心特征</h2><ul>{feature_html}</ul></section>
+<section data-result-block="advice"><h2>发展建议</h2><p>{text(result.get('development_advice'))}</p></section>
+<footer class="meta">本次结果用于自我认知与发展参考，不代表能力高低。继续深度测评时，系统会带入已答题目。</footer></body></html>"""
+
+
 def build_report_html(result: Dict[str, Any]) -> str:
+    if result.get("version") == "lite":
+        return build_lite_report_html(result)
     pcts = score_percentages(result)
     ranked = sorted_types(result, pcts)
     main_type = result.get("mainType") if result.get("mainType") in TYPE_INFO else ranked[0][0]
@@ -353,7 +388,15 @@ def build_report_html(result: Dict[str, Any]) -> str:
         k_rate *= 100
     top_style = result.get("topStyle")
     top_style_name = result.get("topStyleName") or STYLE_INFO.get(top_style, {}).get("name") or "未识别"
-    title = f"{info['name']} × {second_info.get('name', '')}".strip(" ×")
+    title = result.get("conclusion") or f"{info['name']} × {second_info.get('name', '')}".strip(" ×")
+    mixed = result.get("is_mixed", False)
+    unit = "分" if result.get("score_kind") == "standardized_score" else "%"
+    description = result.get("conclusion_reason") if mixed else info.get("desc")
+    features = result.get("core_features") or []
+    feature_section = '<section class="section"><div class="section-title">类型核心特征</div><ul>' + "".join(f"<li>{text(feature)}</li>" for feature in features) + "</ul></section>" if features else ""
+    strength_line = text(result.get("tendency_strength") or "")
+    reason_line = text(result.get("conclusion_reason") or "")
+    candidate_note = f'<div class="muted-line">候选方向参考：{text(info["name"])}；当前尚未确定单一主类型。</div>' if mixed else ""
     created_at = text(result.get("createdAt") or "")
     user_name = text(result.get("userName") or result.get("email") or "学员")
     company = text(result.get("companyName") or "")
@@ -364,9 +407,9 @@ def build_report_html(result: Dict[str, Any]) -> str:
 <head>
 <meta charset="utf-8">
 <style>
-@page {{ size: A4; margin: 16mm 14mm; }}
+@page {{ size: A4; margin: 14mm; }}
 * {{ box-sizing: border-box; }}
-body {{ margin: 0; color: #1F1C2B; font-family: "Noto Sans SC", "Microsoft YaHei", Arial, sans-serif; background: #fff; font-size: 13px; line-height: 1.65; }}
+body {{ margin: 0; color: #1F1C2B; font-family: "Noto Sans SC", "Microsoft YaHei", Arial, sans-serif; background: #fff; font-size: 12.5px; line-height: 1.6; }}
 .page {{ max-width: 760px; margin: 0 auto; }}
 .header {{ display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; padding-bottom: 14px; border-bottom: 1px solid #E8DFEA; }}
 .brand {{ display: flex; align-items: center; gap: 10px; color: #6C216D; font-weight: 700; }}
@@ -381,7 +424,7 @@ h1 {{ margin: 0 0 3px; font-size: 23px; color: {info['color']}; line-height: 1.2
 .desc {{ color: #4F4A5C; }}
 .transform {{ margin-top: 14px; padding: 10px 12px; border-radius: 8px; background: #FAFAFB; border-left: 3px solid {info['color']}; color: #4F4A5C; }}
 .grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px; }}
-.section {{ border: 1px solid #E8DFEA; border-radius: 12px; padding: 16px; }}
+.section {{ border: 1px solid #E8DFEA; border-radius: 12px; padding: 12px; break-inside: avoid; }}
 .section-title {{ color: #8A8495; font-size: 12px; font-weight: 800; letter-spacing: .04em; margin-bottom: 10px; }}
 .radar-wrap {{ display: flex; align-items: center; justify-content: center; }}
 .bar-row {{ display: grid; grid-template-columns: 126px 1fr 42px; align-items: center; gap: 10px; margin: 9px 0; }}
@@ -397,7 +440,7 @@ h1 {{ margin: 0 0 3px; font-size: 23px; color: {info['color']}; line-height: 1.2
 .note {{ color: #4F4A5C; }}
 .muted-line {{ color: #8A8495; font-size: 12px; margin-bottom: 12px; }}
 .path-section, .learn-section {{ margin-bottom: 14px; }}
-.path-item {{ display: grid; grid-template-columns: 28px 1fr; gap: 12px; margin-top: 12px; break-inside: avoid; }}
+.path-item {{ display: grid; grid-template-columns: 28px 1fr; gap: 12px; margin-top: 10px; break-inside: avoid; }}
 .path-num {{ width: 26px; height: 26px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 800; }}
 .path-item h3 {{ margin: 0 0 3px; font-size: 13px; }}
 .path-item p {{ margin: 0; color: #4F4A5C; font-size: 12.5px; line-height: 1.65; }}
@@ -407,31 +450,33 @@ h1 {{ margin: 0 0 3px; font-size: 23px; color: {info['color']}; line-height: 1.2
 .ok-note {{ padding: 12px 14px; border-radius: 10px; background: #EEF8F2; color: #2F7441; border: 1px solid #D9EDDF; }}
 .warn-box {{ border: 1px solid #F1D4D0; background: #FFF7F6; color: #8F332B; border-radius: 12px; padding: 14px 16px; break-inside: avoid; }}
 .warn-box ul {{ margin: 8px 0 0 18px; padding: 0; }}
-.motto {{ margin: 14px 0; padding: 18px 20px; text-align: center; border: 1px solid #E8DFEA; border-radius: 12px; background: linear-gradient(135deg, #FAF3FA, #FFFAF4); break-inside: avoid; }}
+.motto {{ margin: 8px 0; padding: 10px 20px; text-align: center; border: 1px solid #E8DFEA; border-radius: 12px; background: linear-gradient(135deg, #FAF3FA, #FFFAF4); break-inside: avoid; }}
 .motto p {{ margin: 0; color: #1F1C2B; font-size: 14px; font-weight: 700; line-height: 1.7; }}
 .hero, .ok-note {{ break-inside: avoid; }}
-.footer {{ margin-top: 16px; color: #9A94A4; font-size: 11px; text-align: center; }}
+.footer {{ margin-top: 10px; color: #9A94A4; font-size: 11px; text-align: center; break-before: avoid; }}
 </style>
 </head>
 <body>
 <main class="page">
   <header class="header">
     <div class="brand"><div class="logo">M</div><div>美太咨询 MA&T<br><span style="font-size:11px;color:#9A94A4;font-weight:500">Management Agent and Talent</span></div></div>
-    <div class="meta">学员：{user_name}<br>{company} {job_title}<br>{created_at}</div>
+    <div class="meta">学员：{user_name}<br>{company} {job_title}<br>{trace_metadata(result)}</div>
   </header>
 
   <div class="banner">五维度评估结果不代表能力高低排序，仅反映你当前的特质组合与倾向方向，可作为自我认知和发展规划的参考。</div>
 
   <section class="hero">
     <div class="hero-top">
-      <div class="avatar">{text(main_type)}</div>
+      <div class="avatar">{text('复合' if mixed else main_type)}</div>
       <div>
         <h1>{text(title)}</h1>
         <div class="subtitle">{text(info['en'])} · 第{level}层能力水位 · AI知识测试正确率 {clamp_pct(k_rate)}%</div>
-        <div class="desc">{text(info.get("desc"))}</div>
+        <div class="desc">{text(description)}</div>
+        <div class="note">{strength_line}</div><div class="note">{reason_line}</div>
+        <div class="note">{'' if mixed else '参考次类型：' + text(second_info.get('name', ''))}</div>
       </div>
     </div>
-    <div class="transform">转型方向：{text(info.get("transform"))}</div>
+    <div class="transform">转型方向：{text(result.get('development_advice') if mixed else info.get("transform"))}</div>
   </section>
 
   <div class="grid">
@@ -441,7 +486,7 @@ h1 {{ margin: 0 0 3px; font-size: 23px; color: {info['color']}; line-height: 1.2
     </section>
     <section class="section">
       <div class="section-title">MAHDI匹配度分析</div>
-      {bars(ranked)}
+      {bars(ranked, unit)}
     </section>
   </div>
 
@@ -453,6 +498,8 @@ h1 {{ margin: 0 0 3px; font-size: 23px; color: {info['color']}; line-height: 1.2
     </div>
   </section>
 
+  {feature_section}
+  {candidate_note}
   {path_block(info)}
 
   {learn_block(info)}
@@ -464,7 +511,7 @@ h1 {{ margin: 0 0 3px; font-size: 23px; color: {info['color']}; line-height: 1.2
     </section>
     <section class="section">
       <div class="section-title">导出说明</div>
-      <div class="note">本文件由系统根据你账号下最近一次测评记录生成。若你重新完成测评，再次导出时会使用新的最近记录。</div>
+      <div class="note">本文件使用当前打开的已保存测评记录生成。重新完成测评后，请先打开对应报告，再导出该次结果。</div>
     </section>
   </div>
 

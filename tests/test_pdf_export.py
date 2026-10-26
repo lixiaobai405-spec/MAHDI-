@@ -13,6 +13,7 @@ from backend import storage
 from backend.account_api import CreateReq, OpenReq, create_account, open_account
 from backend.app import ResultIn, save_result
 from backend.auth_local import TEACHER_ACCOUNT, TEACHER_PIN, ensure_teacher
+from backend.assessment import get_config, load_bank, score_answers, select_question_ids
 
 
 def sample_result(main_type: str = "D") -> ResultIn:
@@ -84,6 +85,18 @@ class LatestResultPdfTests(unittest.TestCase):
 
         self.assertEqual(404, caught.exception.status_code)
 
+    def test_pdf_can_bind_the_displayed_saved_result_instead_of_a_newer_tab(self) -> None:
+        token = self.create_student_token()
+        auth = f"Bearer {token}"
+        shown = save_result(sample_result("D"), authorization=auth)["result"]
+        save_result(sample_result("I"), authorization=auth)
+        with patch.object(app_module, "render_result_pdf", return_value=b"%PDF-1.4 test") as render:
+            app_module.latest_result_pdf(authorization=auth, result_id=shown["id"])
+        self.assertEqual(render.call_args.args[0]["id"], shown["id"])
+        with self.assertRaises(HTTPException) as caught:
+            app_module.latest_result_pdf(authorization=auth, result_id="another-users-result")
+        self.assertEqual(caught.exception.status_code, 404)
+
     def test_instructor_cannot_download_student_pdf(self) -> None:
         opened = open_account(OpenReq(email=TEACHER_ACCOUNT, pin=TEACHER_PIN, role="instructor"))
 
@@ -113,8 +126,48 @@ class LatestResultPdfTests(unittest.TestCase):
         self.assertIn("完成数据合规底座", html)
         self.assertIn("AI与数据关系：数据是AI系统的核心燃料", html)
         self.assertIn("用你对数据的专业敏感度", html)
-        self.assertIn(".section { border: 1px solid #E8DFEA; border-radius: 12px; padding: 16px; }", html)
         self.assertNotIn("–", html)
+
+    def new_result(self, version="full"):
+        config = get_config()
+        ids = select_question_ids(config) if version == "lite" else [q["key"] for q in load_bank()["questions"]]
+        result = score_answers({key: 0 for key in ids}, version, config)
+        result.update(generated_at="2026-10-26T06:00:00+00:00", createdAt="2026-10-26T06:00:00+00:00", userName="测试学员")
+        return result
+
+    def test_lite_pdf_has_four_blocks_and_exactly_three_features(self) -> None:
+        result = self.new_result("lite")
+        html = pdf_export.build_report_html(result)
+        self.assertEqual(html.count('data-result-block='), 4)
+        self.assertEqual(html.count('data-core-feature='), 3)
+        for text in ("主类型结论", "五类得分", "核心特征", "发展建议", "standard_v2", "2026-10-26"):
+            self.assertIn(text, html)
+        self.assertNotIn("当前AI知识水位", html)
+        self.assertNotIn("个性化转型路径建议", html)
+
+    def test_legacy_pdf_displays_the_same_shares_as_the_saved_web_result(self) -> None:
+        config = dict(get_config(), algorithm_version="legacy_v1")
+        for version in ("lite", "full"):
+            ids = select_question_ids(config) if version == "lite" else [q["key"] for q in load_bank()["questions"]]
+            result = score_answers({key: 0 for key in ids}, version, config)
+            html = pdf_export.build_report_html(result)
+            for value in result["pcts"].values():
+                self.assertTrue(f'>{value}%</div>' in html, f"PDF must display the saved share {value}%")
+
+    def test_full_pdf_uses_standard_scores_and_preserves_all_report_sections(self) -> None:
+        result = self.new_result()
+        html = pdf_export.build_report_html(result)
+        for text in ("standard_v2", "2026-10-26", "明显倾向" if result["tendency_strength"] == "明显倾向" else result["tendency_strength"], "类型核心特征", "当前AI知识水位", "学习方式偏好", "个性化转型路径建议", "优先学习内容推荐"):
+            self.assertIn(text, html)
+        for value in result["pcts"].values():
+            self.assertIn(f'>{value}分</div>', html)
+
+    def test_mixed_conclusion_and_explanation_are_preserved_in_pdf(self) -> None:
+        result = self.new_result()
+        result.update(mainType=None, secondType=None, is_mixed=True, isDouble=True, conclusion="复合型 / 待观察", conclusion_reason="多个类型接近，请结合真实项目继续观察。", tendency_strength="倾向不明显")
+        html = pdf_export.build_report_html(result)
+        self.assertIn("复合型 / 待观察", html)
+        self.assertIn("多个类型接近，请结合真实项目继续观察。", html)
 
 
 if __name__ == "__main__":

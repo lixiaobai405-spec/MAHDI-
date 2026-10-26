@@ -1,0 +1,17 @@
+{
+  "algorithm_version": "standard_v2",
+  "lite_question_count": 12,
+  "dimension_weights": {
+    "E": 0.25,
+    "K": 0.2,
+    "I": 0.2,
+    "L": 0.2,
+    "P": 0.15
+  },
+  "score_min": 20,
+  "score_max": 90,
+  "mixed_gap": 5,
+  "moderate_gap": 8,
+  "strong_gap": 18,
+  "result_schema_version": "2.0"
+}
