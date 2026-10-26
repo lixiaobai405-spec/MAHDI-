@@ -4,6 +4,7 @@ import random
 import statistics
 import unittest
 from copy import deepcopy
+from unittest.mock import patch
 
 from backend.assessment import (
     classify_scores, get_config, load_bank, score_answers, select_question_ids,
@@ -46,7 +47,7 @@ class AssessmentScoringTests(unittest.TestCase):
         self.assertEqual(result["pcts"], result["final"])
         self.assertNotEqual(sum(result["final"].values()), 100)
         self.assertTrue(all(20 <= score <= 90 for score in result["final"].values()))
-        self.assertEqual(result["algorithm_version"], "standard_v2")
+        self.assertEqual(result["algorithm_version"], "standard_v3")
         self.assertEqual(len(result["core_features"]), 5)
         self.assertEqual(len(result["lite_features"]), 3)
 
@@ -55,6 +56,62 @@ class AssessmentScoringTests(unittest.TestCase):
         self.assertEqual(result["algorithm_version"], "legacy_v1")
         self.assertLessEqual(abs(sum(result["pcts"].values()) - 100), 2)
         self.assertTrue(all(isinstance(value, int) for value in result["final"].values()))
+
+    def test_standard_v2_replays_historical_full_and_lite_scores(self):
+        expected = {
+            "full": {"M": 73, "A": 20, "H": 90, "D": 21, "I": 20},
+            "lite": {"M": 61, "A": 25, "H": 90, "D": 25, "I": 24},
+        }
+        config = dict(self.config, algorithm_version="standard_v2")
+        for version in ("full", "lite"):
+            ids = select_question_ids(config) if version == "lite" else [q["key"] for q in self.bank["questions"]]
+            result = score_answers({key: 0 for key in ids}, version, config)
+            self.assertEqual(result["final"], expected[version])
+            self.assertEqual(result["reference_distribution"], "theoretical_options_v1")
+
+    def test_standard_v3_removes_common_signal_without_changing_the_type_direction(self):
+        # Identical knowledge/experience uplift across all five types must not
+        # collapse a directional profile into five ceiling scores.
+        bank = deepcopy(self.bank)
+        bank["questions"] = []
+        for dim in "EKILP":
+            bank["questions"].extend([
+                {"key": f"{dim}direction", "dim": dim, "opts": ["M", "others"],
+                 "sc": [{"M": 2}, {"A": 2, "H": 2, "D": 2, "I": 2}]},
+                {"key": f"{dim}common", "dim": dim, "opts": ["low", "high"],
+                 "sc": [{}, dict.fromkeys("MAHDI", 4)]},
+            ])
+        answers = {q["key"]: 0 for q in bank["questions"]}
+        uplifted = {key: (1 if key.endswith("common") else value) for key, value in answers.items()}
+        config = dict(self.config, algorithm_version="standard_v3")
+        with patch("backend.assessment.load_bank", return_value=bank):
+            before = score_answers(answers, "full", config)
+            after = score_answers(uplifted, "full", config)
+        self.assertEqual(before["final"], after["final"])
+        self.assertEqual(before["leadingType"], "M")
+        self.assertFalse(before["is_mixed"])
+        self.assertEqual(after["reference_distribution"], "theoretical_options_centered_v1")
+
+    def test_standard_v3_does_not_lose_strong_direction_at_the_cdf_ceiling(self):
+        answers = {
+            "E1": 1, "E2": 0, "E3": 0, "E4": 3, "E5": 0, "E6": 3, "E7": 3, "E8": 3, "E9": 3, "E10": 2,
+            "K1": 1, "K2": 1, "K3": 0, "K4": 1, "K5": 2, "K6": 1, "K7": 1, "K8": 1, "K9": 2, "K10": 2,
+            **{f"I{i}": 3 for i in range(1, 9)}, **{f"L{i}": 2 for i in range(1, 9)},
+            "P1": 1, "P2": 2, "P3": 2, "P4": 1, "P5": 0, "P6": 2, "P7": 1, "P8": 2,
+        }
+        old = score_answers(answers, "full", dict(self.config, algorithm_version="standard_v2"))
+        self.assertEqual(old["final"], {"M": 90, "A": 70, "H": 62, "D": 90, "I": 89})
+        self.assertEqual(old["leadingType"], "M")
+        self.assertTrue(old["is_mixed"])
+        config = dict(self.config, algorithm_version="standard_v3")
+        full = score_answers(answers, "full", config)
+        lite = score_answers({key: answers[key] for key in select_question_ids(config)}, "lite", config)
+        self.assertEqual(full["leadingType"], "D")
+        self.assertEqual(lite["leadingType"], "D")
+        self.assertFalse(full["is_mixed"])
+        self.assertEqual(set(full), set(lite))
+        self.assertEqual(set(full["final"]), set("MAHDI"))
+        self.assertTrue(all(20 <= value <= 90 for value in full["final"].values()))
 
     def test_close_scores_do_not_force_a_primary_type(self):
         result = classify_scores(dict(M=61, A=60, H=59, D=58, I=57), self.config)

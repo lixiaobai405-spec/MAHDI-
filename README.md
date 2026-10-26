@@ -54,7 +54,7 @@ backend/data/mahid.db
 
 ## 1019配置与验收
 
-`backend/assessment_config.json` 控制 `lite_question_count` 和 `algorithm_version`（`standard_v2` / `legacy_v1`）。新选择读取新配置；进行中和历史结果保留自己的配置快照。题库与五类定义统一存放在 `backend/assessment_bank.json`。
+`backend/assessment_config.json` 控制 `lite_question_count` 和 `algorithm_version`（默认 `standard_v3`，保留 `standard_v2` / `legacy_v1` 回放）。v3 在五类标准分转为展示分前减去共同偏移，避免五类同时逼近上限后舍入并列。新选择读取新配置；进行中和历史结果保留自己的配置快照。题库与五类定义统一存放在 `backend/assessment_bank.json`。旧的客户端计分提交接口 `/api/results` 已停用，历史结果仍可读取和导出。
 
 ```bash
 python -m pytest tests -q

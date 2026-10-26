@@ -1,5 +1,5 @@
 {
-  "algorithm_version": "standard_v2",
+  "algorithm_version": "standard_v3",
   "lite_question_count": 12,
   "dimension_weights": {
     "E": 0.25,

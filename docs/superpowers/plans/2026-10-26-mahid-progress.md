@@ -1,5 +1,17 @@
 # SDD ledger — plan: docs/superpowers/plans/2026-10-26-mahid-lite-scoring.md
 
+## 2026-10-27 adversarial follow-up (active)
+
+- User direction: continue optimizing concrete audit failures; avoid over-defensive frameworks. Work in the existing primary checkout on `fix/1019-adversarial`, based on merged `main@e5a748b`.
+- Outcome / composition decision: the server-scored evaluation endpoint is the sole writer of new results; historical records remain readable. Retire the unused client-scored writer rather than adding a second validation/scoring adapter. A selection may only display questions from its recorded bank version.
+- Counterexamples: authenticated empty answers plus forged 999/-999 scores previously persisted through `/api/results`; retrying an old selection returned current question text under an old bank version. Both reproduced RED; retirement (410) and early bank-version conflict (409) are GREEN with historical PDF reading retained (25 focused tests).
+- Scoring remains under investigation: frozen independent uniform/latent samples expose a gap between the 12-question projection and 44-question result. Compare bounded candidates on independent seeds; do not redefine the full result around the 12 questions or select samples by their output.
+- Why chain: close the alternative writer and stale-question response → preserve answer/score/version identity → keep saved reports trustworthy; independently validate the lite projection → improve comparability without hiding uncertainty → users can confidently start short and continue deep.
+- Completion: regression suite plus independent audit replay, honest simulated consistency metrics, and current UI evidence for demo ETA/traceability. Earlier completion statements below are historical and superseded by the adversarial report.
+- MAHID follow-up verified: 59 tests passed; independent Reviewer passed 39 focused tests, replayed 400 v2 payloads against frozen outputs and 400 legacy payloads against the base, and checked a v2 selection/completion/upgrade under the new v3 default. No new blocking finding. The new v3 only centers the five z scores before the CDF; v2/legacy remain replayable.
+- Actual-source simulated evidence: the unchanged synthetic diagnostic has 30/30 leading agreement, 100-result median span48 and strength counts23/35/42. An independent latent heldout seed (1,000 pairs) improves58.7%→92.4%; first30 is83.3%. Definite conflicts remain19/1,000 while full mixed results decrease947→170. Uniform random answers remain39.4% with334 definite conflicts/1,000, and are explicitly not passed off as a coherent-person population. R1's universal no-contradiction claim remains unproven; this change corrects saturation rather than forcing agreement.
+- Evidence: `E:/codex-acceptance/optimization-20261027/scoring/source_verification.json` and `review-mahid/replay-results.json`. No real population/physical-phone validity claim; user-approved simulated scope is retained.
+
 ## Identity and scope
 
 - User goal: finish R1–R6/R10; paperporo already complete. Root owns MAHID, demo Coder owns demo independently.

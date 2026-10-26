@@ -40,7 +40,7 @@ def validate_config(config: dict[str, Any]) -> None:
     count = config["lite_question_count"]
     if isinstance(count, bool) or not isinstance(count, int) or not 10 <= count <= 20:
         raise ValueError("精简版题量须为10至20的整数")
-    if config["algorithm_version"] not in ("legacy_v1", "standard_v2"):
+    if config["algorithm_version"] not in ("legacy_v1", "standard_v2", "standard_v3"):
         raise ValueError("未知评分算法版本")
     if not 0 <= config["mixed_gap"] <= config["moderate_gap"] <= config["strong_gap"]:
         raise ValueError("倾向阈值配置无效")
@@ -143,7 +143,7 @@ def score_answers(answers: dict[str, int], version: str, config: dict[str, Any] 
             raise ValueError(f"题目{question['key']}的答案无效")
     dim_norm = {dim: {} for dim in DIMS}
     raw = {dim: {kind: 0 for kind in TYPES} for dim in DIMS}
-    final, z_scores = {}, {}
+    final, z_scores, legacy_scores = {}, {}, {}
     for kind in TYPES:
         observed = mean = variance = legacy = 0.
         for dim in DIMS:
@@ -162,9 +162,16 @@ def score_answers(answers: dict[str, int], version: str, config: dict[str, Any] 
                 mean += expected
                 variance += sum((value - expected) ** 2 for value in values) / len(values)
         z = (observed - mean) / math.sqrt(variance) if variance else 0
+        z_scores[kind] = z
+        legacy_scores[kind] = rounded(legacy)
+    # Relative type direction must survive a common uplift across all types.
+    # Keep v2 unchanged so saved configuration snapshots remain replayable.
+    center = sum(z_scores.values()) / len(TYPES) if config["algorithm_version"] == "standard_v3" else 0
+    for kind in TYPES:
+        z = z_scores[kind] - center
         z_scores[kind] = round(z, 6)
         percentile = .5 * (1 + math.erf(z / math.sqrt(2)))
-        final[kind] = rounded(legacy) if config["algorithm_version"] == "legacy_v1" else rounded(config["score_min"] + (config["score_max"] - config["score_min"]) * percentile)
+        final[kind] = legacy_scores[kind] if config["algorithm_version"] == "legacy_v1" else rounded(config["score_min"] + (config["score_max"] - config["score_min"]) * percentile)
     result = classify_scores(final, config)
     if config["algorithm_version"] == "legacy_v1":
         first, second = result["sorted"][0][0], result["sorted"][1][0]
@@ -185,7 +192,7 @@ def score_answers(answers: dict[str, int], version: str, config: dict[str, Any] 
         pcts={kind: rounded(value / total * 100) if total else 0 for kind, value in final.items()} if config["algorithm_version"] == "legacy_v1" else dict(final),
         dimNorm=dim_norm, raw_scores=raw, z_scores=z_scores,
         score_kind="legacy_share" if config["algorithm_version"] == "legacy_v1" else "standardized_score",
-        reference_distribution="theoretical_options_v1",
+        reference_distribution="theoretical_options_centered_v1" if config["algorithm_version"] == "standard_v3" else "theoretical_options_v1",
         core_features=list(features), lite_features=list(features[:3]),
         development_advice="建议继续完成深度测评，并选择一个真实项目观察自己在不同任务中的表现。" if result["is_mixed"] else bank["types"][result["leadingType"]]["paths"][0]["c"],
     )

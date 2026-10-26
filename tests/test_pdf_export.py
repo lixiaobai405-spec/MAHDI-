@@ -11,13 +11,12 @@ from backend import app as app_module
 from backend import pdf_export
 from backend import storage
 from backend.account_api import CreateReq, OpenReq, create_account, open_account
-from backend.app import ResultIn, save_result
 from backend.auth_local import TEACHER_ACCOUNT, TEACHER_PIN, ensure_teacher
 from backend.assessment import get_config, load_bank, score_answers, select_question_ids
 
 
-def sample_result(main_type: str = "D") -> ResultIn:
-    return ResultIn(
+def sample_result(main_type: str = "D") -> dict:
+    return dict(
         answers={"q1": "A"},
         final={"M": 19, "A": 21, "H": 17, "D": 23, "I": 20},
         pcts={"M": 19, "A": 21, "H": 17, "D": 23, "I": 20},
@@ -62,11 +61,21 @@ class LatestResultPdfTests(unittest.TestCase):
         )
         return created["accessToken"]
 
+    def seed_legacy_result(self, main_type: str, auth: str) -> dict:
+        # Historical rows remain readable after retiring the client-scored writer.
+        current = app_module.get_current(auth)
+        with storage.connect() as conn:
+            index = conn.execute("SELECT COUNT(*) FROM results").fetchone()[0]
+            created_at = f"2026-10-26T06:00:{index:02d}+00:00"
+            result = dict(sample_result(main_type), id=f"historical-{index}", userId=current["id"], createdAt=created_at)
+            conn.execute("INSERT INTO results VALUES (?, ?, ?, ?)", (result["id"], current["id"], storage.dump_json(result), created_at))
+        return result
+
     def test_student_downloads_latest_result_pdf(self) -> None:
         token = self.create_student_token()
         auth = f"Bearer {token}"
-        save_result(sample_result("D"), authorization=auth)
-        save_result(sample_result("I"), authorization=auth)
+        self.seed_legacy_result("D", auth)
+        self.seed_legacy_result("I", auth)
 
         with patch.object(app_module, "render_result_pdf", return_value=b"%PDF-1.4\nfake") as render:
             response = app_module.latest_result_pdf(authorization=auth)
@@ -88,8 +97,8 @@ class LatestResultPdfTests(unittest.TestCase):
     def test_pdf_can_bind_the_displayed_saved_result_instead_of_a_newer_tab(self) -> None:
         token = self.create_student_token()
         auth = f"Bearer {token}"
-        shown = save_result(sample_result("D"), authorization=auth)["result"]
-        save_result(sample_result("I"), authorization=auth)
+        shown = self.seed_legacy_result("D", auth)
+        self.seed_legacy_result("I", auth)
         with patch.object(app_module, "render_result_pdf", return_value=b"%PDF-1.4 test") as render:
             app_module.latest_result_pdf(authorization=auth, result_id=shown["id"])
         self.assertEqual(render.call_args.args[0]["id"], shown["id"])
@@ -106,7 +115,7 @@ class LatestResultPdfTests(unittest.TestCase):
         self.assertEqual(403, caught.exception.status_code)
 
     def test_windows_render_delegates_to_subprocess(self) -> None:
-        payload = sample_result().model_dump()
+        payload = sample_result()
 
         with (
             patch.object(pdf_export.sys, "platform", "win32"),
@@ -119,7 +128,7 @@ class LatestResultPdfTests(unittest.TestCase):
         self.assertEqual(payload, render.call_args.args[0])
 
     def test_report_html_includes_full_recommendation_sections(self) -> None:
-        html = pdf_export.build_report_html(sample_result("D").model_dump())
+        html = pdf_export.build_report_html(sample_result("D"))
 
         self.assertIn("个性化转型路径建议", html)
         self.assertIn("优先学习内容推荐", html)
@@ -140,7 +149,7 @@ class LatestResultPdfTests(unittest.TestCase):
         html = pdf_export.build_report_html(result)
         self.assertEqual(html.count('data-result-block='), 4)
         self.assertEqual(html.count('data-core-feature='), 3)
-        for text in ("主类型结论", "五类得分", "核心特征", "发展建议", "standard_v2", "2026-10-26"):
+        for text in ("主类型结论", "五类得分", "核心特征", "发展建议", result["algorithm_version"], "2026-10-26"):
             self.assertIn(text, html)
         self.assertNotIn("当前AI知识水位", html)
         self.assertNotIn("个性化转型路径建议", html)
@@ -157,7 +166,7 @@ class LatestResultPdfTests(unittest.TestCase):
     def test_full_pdf_uses_standard_scores_and_preserves_all_report_sections(self) -> None:
         result = self.new_result()
         html = pdf_export.build_report_html(result)
-        for text in ("standard_v2", "2026-10-26", "明显倾向" if result["tendency_strength"] == "明显倾向" else result["tendency_strength"], "类型核心特征", "当前AI知识水位", "学习方式偏好", "个性化转型路径建议", "优先学习内容推荐"):
+        for text in (result["algorithm_version"], "2026-10-26", "明显倾向" if result["tendency_strength"] == "明显倾向" else result["tendency_strength"], "类型核心特征", "当前AI知识水位", "学习方式偏好", "个性化转型路径建议", "优先学习内容推荐"):
             self.assertIn(text, html)
         for value in result["pcts"].values():
             self.assertIn(f'>{value}分</div>', html)

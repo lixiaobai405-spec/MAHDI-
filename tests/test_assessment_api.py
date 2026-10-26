@@ -82,14 +82,32 @@ class AssessmentApiTests(unittest.TestCase):
         forged = self.client.post("/api/assessment/evaluate", json={"selection_id": selected["selection"]["id"], "answers": answers, "final": {"M": 100}})
         self.assertEqual(forged.status_code, 422)
 
+    def test_retired_result_writer_cannot_bypass_server_scoring(self):
+        response = self.client.post("/api/results", json={
+            "answers": {}, "final": {"M": 999, "A": -999},
+            "pcts": {"M": 999, "A": -999}, "mainType": "M", "level": 4,
+        })
+        self.assertEqual(response.status_code, 410)
+        self.assertEqual(self.client.get("/api/results/latest").status_code, 404)
+        with storage.connect() as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM results").fetchone()[0], 0)
+
     def test_algorithm_snapshot_survives_global_switch(self):
         selected = self.select()
         legacy = dict(get_config(), algorithm_version="legacy_v1")
         with patch.object(app_module, "get_assessment_config", return_value=legacy):
             result, _ = self.complete(selected)
             new = self.select()
-        self.assertEqual(result["algorithm_version"], "standard_v2")
+        self.assertEqual(result["algorithm_version"], "standard_v3")
         self.assertEqual(new["selection"]["config"]["algorithm_version"], "legacy_v1")
+
+    def test_v2_selection_keeps_its_scoring_after_default_upgrade(self):
+        old_config = dict(get_config(), algorithm_version="standard_v2")
+        with patch.object(app_module, "get_assessment_config", return_value=old_config):
+            selected = self.select()
+        result, answers = self.complete(selected)
+        self.assertEqual(result["algorithm_version"], "standard_v2")
+        self.assertEqual(result["final"], score_answers(answers, "lite", old_config)["final"])
 
     def test_latest_result_comes_from_the_current_users_saved_records(self):
         self.assertEqual(self.client.get("/api/results/latest").status_code, 404)
@@ -130,6 +148,18 @@ class AssessmentApiTests(unittest.TestCase):
             response = self.client.post("/api/assessment/evaluate", json={"selection_id": selected["selection"]["id"], "answers": answers})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["result"], result)
+
+    def test_selection_retry_rejects_changed_bank_before_showing_questions(self):
+        self.select(client_request_id="resume-before-bank-update")
+        changed_bank = deepcopy(load_bank())
+        changed_bank["bank_version"] = "mahid-next-bank"
+        changed_bank["questions"][0]["text"] = "Updated question"
+        with patch.object(app_module, "load_assessment_bank", return_value=changed_bank):
+            response = self.client.post("/api/assessment/selections", json={
+                "version": "lite", "client_request_id": "resume-before-bank-update",
+            })
+        self.assertEqual(response.status_code, 409)
+        self.assertNotIn("questions", response.json())
 
     def test_cross_user_selection_or_upgrade_is_not_accessible(self):
         selected = self.select()

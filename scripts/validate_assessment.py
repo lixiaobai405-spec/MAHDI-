@@ -76,7 +76,7 @@ def validate(distribution_answers, paired_answers, source_kind):
         "evidence_kind": source_kind,
         "algorithm_version": config["algorithm_version"],
         "question_bank_version": load_bank()["bank_version"],
-        "reference_distribution": "theoretical_options_v1",
+        "reference_distribution": full_results[0]["reference_distribution"] if full_results else None,
         "lite_question_count": len(ids), "lite_question_ids": ids,
         "distribution_result_count": len(full_results), "median_max_min_gap": median_span,
         "tendency_strength_counts": strengths,
